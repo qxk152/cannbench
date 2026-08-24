@@ -234,7 +234,18 @@ def test_ascend_softmax_v3_1024_persistent_path_prefetches_next_tile():
     assert "asc_sync_wait(PIPE_MTE3, PIPE_V, event_id)" in persistent_1024
 
 
-def test_ascend_softmax_v3_dispatches_le_128_to_bucket_pad_pipeline():
+def test_ascend_softmax_v3_dispatches_lt_32_to_generic_persistent_kernel():
+    dispatch = _read_v3_simt_source("row_persistent_fallback.asc")
+    lt_32_start = dispatch.index("if (dim_size < 32)")
+    bucket_start = dispatch.index("if (dim_size <= 128)", lt_32_start)
+    lt_32_dispatch = dispatch[lt_32_start:bucket_start]
+
+    assert "dispatch_row_persistent_forward_kernel_with_threads<" in lt_32_dispatch
+    assert "1024>(" in lt_32_dispatch
+    assert "return;" in lt_32_dispatch
+
+
+def test_ascend_softmax_v3_dispatches_32_through_128_to_bucket_pad_pipeline():
     dispatch = _read_v3_simt_source("row_persistent_fallback.asc")
     persistent_128 = _read_v3_simt_source("persistent_128.asc")
     le_128_start = dispatch.index("if (dim_size <= 128)")

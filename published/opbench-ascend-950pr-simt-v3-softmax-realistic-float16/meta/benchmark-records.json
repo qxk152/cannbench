@@ -24,7 +24,7 @@
       "source_file": "torchbench_train/BERT_pytorch_train.json",
       "source_op": "aten._softmax.default",
       "metrics": {
-        "latency_ms": 0.011186999999999999
+        "latency_ms": 0.009611000000000001
       },
       "accuracy": {
         "passed": true,
@@ -55,7 +55,7 @@
       "source_file": "hf_train/CamemBert_train.json",
       "source_op": "aten._log_softmax.default",
       "metrics": {
-        "latency_ms": 1.035625977
+        "latency_ms": 0.816026978
       },
       "accuracy": {
         "passed": true,
@@ -88,7 +88,7 @@
       "source_file": "hf_train/YituTechConvBert_train.json",
       "source_op": "aten._softmax.default",
       "metrics": {
-        "latency_ms": 0.047039001
+        "latency_ms": 0.045883999
       },
       "accuracy": {
         "passed": true,
@@ -120,7 +120,7 @@
       "source_file": "hf_train/YituTechConvBert_train.json",
       "source_op": "aten._softmax.default",
       "metrics": {
-        "latency_ms": 0.008028
+        "latency_ms": 0.008187
       },
       "accuracy": {
         "passed": true,
@@ -151,7 +151,7 @@
       "source_file": "hf_train/YituTechConvBert_train.json",
       "source_op": "aten._log_softmax.default",
       "metrics": {
-        "latency_ms": 0.991429993
+        "latency_ms": 0.780950989
       },
       "accuracy": {
         "passed": true,
@@ -184,7 +184,7 @@
       "source_file": "timm_train/crossvit_9_240_train.json",
       "source_op": "aten._softmax.default",
       "metrics": {
-        "latency_ms": 0.004359
+        "latency_ms": 0.004042
       },
       "accuracy": {
         "passed": true,
@@ -217,7 +217,7 @@
       "source_file": "hf_train/DebertaV2ForMaskedLM_train.json",
       "source_op": "aten._softmax.default",
       "metrics": {
-        "latency_ms": 0.025448999
+        "latency_ms": 0.025277
       },
       "accuracy": {
         "passed": true,
@@ -250,7 +250,7 @@
       "source_file": "hf_train/ElectraForCausalLM_train.json",
       "source_op": "aten._softmax.default",
       "metrics": {
-        "latency_ms": 0.066348
+        "latency_ms": 0.063143002
       },
       "accuracy": {
         "passed": true,
@@ -283,7 +283,7 @@
       "source_file": "hf_train/GPTJForCausalLM_train.json",
       "source_op": "aten._softmax.default",
       "metrics": {
-        "latency_ms": 0.004131999999999999
+        "latency_ms": 0.003558
       },
       "accuracy": {
         "passed": true,
@@ -316,7 +316,7 @@
       "source_file": "hf_train/GPTNeoForCausalLM_train.json",
       "source_op": "aten._softmax.default",
       "metrics": {
-        "latency_ms": 0.024407
+        "latency_ms": 0.020128
       },
       "accuracy": {
         "passed": true,
@@ -349,7 +349,7 @@
       "source_file": "timm_train/eca_halonext26ts_train.json",
       "source_op": "aten._softmax.default",
       "metrics": {
-        "latency_ms": 0.159440994
+        "latency_ms": 0.126374001
       },
       "accuracy": {
         "passed": true,
@@ -382,7 +382,7 @@
       "source_file": "hf_train/LayoutLMForMaskedLM_train.json",
       "source_op": "aten._softmax.default",
       "metrics": {
-        "latency_ms": 0.107280998
+        "latency_ms": 0.099512001
       },
       "accuracy": {
         "passed": true,
@@ -415,7 +415,7 @@
       "source_file": "timm_train/levit_128_train.json",
       "source_op": "aten._softmax.default",
       "metrics": {
-        "latency_ms": 0.606981018
+        "latency_ms": 0.508600006
       },
       "accuracy": {
         "passed": true,
@@ -448,7 +448,7 @@
       "source_file": "timm_train/levit_128_train.json",
       "source_op": "aten._softmax.default",
       "metrics": {
-        "latency_ms": 0.305088989
+        "latency_ms": 0.234983994
       },
       "accuracy": {
         "passed": true,
@@ -479,7 +479,7 @@
       "source_file": "hf_train/AllenaiLongformerBase_train.json",
       "source_op": "aten._log_softmax.default",
       "metrics": {
-        "latency_ms": 0.744753052
+        "latency_ms": 0.58735199
       },
       "accuracy": {
         "passed": true,
@@ -510,7 +510,7 @@
       "source_file": "hf_train/M2M100ForConditionalGeneration_train.json",
       "source_op": "aten._log_softmax.default",
       "metrics": {
-        "latency_ms": 0.940441040
+        "latency_ms": 0.808838013
       },
       "accuracy": {
         "passed": true,
@@ -543,7 +543,7 @@
       "source_file": "hf_train/MobileBertForMaskedLM_train.json",
       "source_op": "aten._softmax.default",
       "metrics": {
-        "latency_ms": 0.024382999000000002
+        "latency_ms": 0.020188999
       },
       "accuracy": {
         "passed": true,
@@ -574,7 +574,7 @@
       "source_file": "hf_train/MT5ForConditionalGeneration_train.json",
       "source_op": "aten._log_softmax.default",
       "metrics": {
-        "latency_ms": 1.732471069
+        "latency_ms": 1.530100952
       },
       "accuracy": {
         "passed": true,
@@ -605,7 +605,7 @@
       "source_file": "hf_train/OPTForCausalLM_train.json",
       "source_op": "aten._log_softmax.default",
       "metrics": {
-        "latency_ms": 0.7062090449999999
+        "latency_ms": 0.595745972
       },
       "accuracy": {
         "passed": true,
@@ -637,7 +637,7 @@
       "source_file": "hf_train/PegasusForConditionalGeneration_train.json",
       "source_op": "aten._softmax.default",
       "metrics": {
-        "latency_ms": 0.024486
+        "latency_ms": 0.020875
       },
       "accuracy": {
         "passed": true,
@@ -669,7 +669,7 @@
       "source_file": "hf_train/PLBartForCausalLM_train.json",
       "source_op": "aten._softmax.default",
       "metrics": {
-        "latency_ms": 0.252776993
+        "latency_ms": 0.252235001
       },
       "accuracy": {
         "passed": true,
@@ -700,7 +700,7 @@
       "source_file": "hf_train/PLBartForCausalLM_train.json",
       "source_op": "aten._log_softmax.default",
       "metrics": {
-        "latency_ms": 1.480234985
+        "latency_ms": 1.173618042
       },
       "accuracy": {
         "passed": true,
@@ -732,7 +732,7 @@
       "source_file": "torchbench_train/speech_transformer_train.json",
       "source_op": "aten._softmax.default",
       "metrics": {
-        "latency_ms": 0.015565
+        "latency_ms": 0.011512
       },
       "accuracy": {
         "passed": true,
@@ -765,7 +765,7 @@
       "source_file": "timm_train/swin_base_patch4_window7_224_train.json",
       "source_op": "aten._softmax.default",
       "metrics": {
-        "latency_ms": 0.06987200199999999
+        "latency_ms": 0.044793999
       },
       "accuracy": {
         "passed": true,
@@ -798,7 +798,7 @@
       "source_file": "hf_train/T5Small_train.json",
       "source_op": "aten._softmax.default",
       "metrics": {
-        "latency_ms": 0.068477997
+        "latency_ms": 0.065154999
       },
       "accuracy": {
         "passed": true,
@@ -829,7 +829,7 @@
       "source_file": "hf_train/T5Small_train.json",
       "source_op": "aten._log_softmax.default",
       "metrics": {
-        "latency_ms": 0.48702301
+        "latency_ms": 0.408355011
       },
       "accuracy": {
         "passed": true,
@@ -861,7 +861,7 @@
       "source_file": "hf_train/TrOCRForCausalLM_train.json",
       "source_op": "aten._softmax.default",
       "metrics": {
-        "latency_ms": 0.069735001
+        "latency_ms": 0.067523003
       },
       "accuracy": {
         "passed": true,
@@ -894,7 +894,7 @@
       "source_file": "timm_train/xcit_large_24_p8_224_train.json",
       "source_op": "aten._softmax.default",
       "metrics": {
-        "latency_ms": 0.004769
+        "latency_ms": 0.003303
       },
       "accuracy": {
         "passed": true,
@@ -925,7 +925,7 @@
       "source_file": "hf_train/XGLMForCausalLM_train.json",
       "source_op": "aten._log_softmax.default",
       "metrics": {
-        "latency_ms": 0.911580994
+        "latency_ms": 0.8143150020000001
       },
       "accuracy": {
         "passed": true,
@@ -958,7 +958,7 @@
       "source_file": "hf_train/XLNetLMHeadModel_train.json",
       "source_op": "aten._softmax.default",
       "metrics": {
-        "latency_ms": 0.066552002
+        "latency_ms": 0.063528
       },
       "accuracy": {
         "passed": true,

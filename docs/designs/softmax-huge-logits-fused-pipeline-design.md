@@ -41,7 +41,8 @@ The retained pipeline uses:
 - two `56320`-element FP16 UB slots;
 - the existing MTE2/V/MTE3 two-slot event protocol;
 - online stable `(max, sum)` combination with FP32 accumulation;
-- the existing per-row `row_max` and `row_inv_sum` GM workspace;
+- a two-float `running_stats_ub` state for the current row, without GM metadata
+  workspace or temporary metadata tensors;
 - the existing two-kernel implementation as the FP32 fallback.
 
 The stats traversal handles the tail tile first, then visits complete tiles in
@@ -59,11 +60,11 @@ remaining tiles -> pipelined GM reload, normalize/write
 
 ## Dispatch Boundary
 
-`launch_row_fast_large_tiled_forward_kernel` selects the fused implementation
-only when `scalar_t` is FP16. The FP32 path retains the established two-kernel
-stats/write implementation. Shapes at or below the whole-row UB limit continue
-to use the existing whole-row path, and persistent or spatial dispatch is
-unchanged.
+`dispatch_row_fast_large_tiled_fused_forward_kernel` handles the fused FP16
+implementation. The FP32 path retains the established two-kernel stats/write
+implementation and its per-row GM workspace. Shapes at or below the whole-row
+UB limit continue to use the existing whole-row path, and persistent or spatial
+dispatch is unchanged.
 
 This dtype boundary is deliberate. The measured gain applies to the tested
 FP16 shapes and tile geometry; it is not evidence that FP32 has the same UB,

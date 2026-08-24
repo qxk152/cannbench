@@ -43,8 +43,8 @@ row shape 的多路径实现：
    估算问题，再引入 GM -> UB -> SIMT 计算 -> GM 的双缓冲流水。
 5. 针对 logits 大 row，按“一整行能否放入 UB”继续分流：能放入时使用
    whole-row UB recompute；放不下时，FP16 使用单 kernel 融合 tiled stats/write
-   并复用一块完整 UB tile，FP32 保留两个 MTE/UB tiled kernel fallback。两种
-   路径都使用行级 GM workspace。
+   并复用一块完整 UB tile，在线统计量保留在 UB；FP32 保留两个 MTE/UB tiled
+   kernel fallback，并使用行级 GM workspace 连接两个阶段。
 
 这条路径与 PyTorch CUDA 的经验一致：Softmax 的关键不是找到一个覆盖所有
 shape 的万能 kernel，而是围绕 row 长度、对齐、片上存储容量和寄存器压力
@@ -99,7 +99,9 @@ if inner_size != 1:
 else:
     if dim_size <= 2048 and dim_size * sizeof(dtype) <= 8192:
         persistent path
-        if dim_size <= 128:
+        if dim_size < 32:
+            通用 persistent register/shuffle kernel
+        elif dim_size <= 128:
             64/128 bucket padded-UB kernel
         elif dim_size <= 256:
             256 bucket padded-UB kernel
@@ -140,6 +142,7 @@ direct fast kernel 不再由主分发命中。它的 ILP、x4/x2 和 scalar 访�
 
 | `dim_size` | 当前路径 |
 | ---: | --- |
+| `9` | 通用 1024-thread persistent register/shuffle |
 | `48` | `persistent_128` 中的 64 bucket padded-UB |
 | `128` | `persistent_128` 中的 128 bucket padded-UB |
 | `196/204/256` | `persistent_256` 中的 256 bucket padded-UB |
@@ -270,7 +273,8 @@ GM input
 专用函数，导致其他 persistent shape 进入不匹配的实现。修复后的分发为：
 
 ```text
-dim_size <= 128            -> persistent_128 bucket padded-UB
+dim_size < 32              -> 通用 1024-thread persistent 模板
+32 <= dim_size <= 128      -> persistent_128 bucket padded-UB
 129 <= dim_size <= 256     -> persistent_256 bucket padded-UB
 257 <= dim_size <= 512     -> persistent_512 bucket padded-UB
 dim_size == 1024           -> persistent_1024 专用流水
@@ -356,14 +360,16 @@ FP16 原先也使用同样的两 kernel 拆分，后续已由 4.14 的单 kernel
 在融合前两-kernel 阶段的历史代表性对比基本持平：`longformer_logits` 为
 `0.896138 -> 0.898242 ms`，`m2m100_logits` 为 `1.464791 -> 1.464915 ms`。
 
-### 4.13 为 `dim_size <= 512` 增加 bucket padded-UB 流水
+### 4.13 为 `32 <= dim_size <= 512` 增加 bucket padded-UB 流水
 
 **已实现。** `persistent_128.asc`、`persistent_256.asc` 和
 `persistent_512.asc` 现在复用 `persistent_bucket_pad_common.h` 中的 bucket
-实现。1024-thread VF 包含 32 个 warp，每个 warp 处理一行；`dim_size` 按
-`64/128/256/512` bucket 选择固定 UB row stride，GM 到 UB 与 UB 到 GM
-都使用高维 stride copy，只在 UB 内保留 padding，不再需要额外 compact
-输出。max、exp-sum 和 normalize 均使用 FP32 累加。
+实现。1024-thread VF 包含 32 个 warp，每个 warp 处理一行；`dim_size` 在
+`32..512` 范围内按 `64/128/256/512` bucket 选择固定 UB row stride，GM 到
+UB 与 UB 到 GM 都使用高维 stride copy，只在 UB 内保留 padding，不再需要
+额外 compact 输出。max、exp-sum 和 normalize 均使用 FP32 累加。小于 32 的
+row 保留通用 persistent register/shuffle 路径，避免短 row 的 DMA、event 和
+padding 固定成本。
 
 该实现来自 `softmax_bucket_vf_pad` 样例：把非整 bucket 的 row padding
 放在 UB stride 中处理，SIMT VF 只根据 `col < dim_size` 屏蔽无效列。没有
@@ -377,10 +383,11 @@ FP16 原先也使用同样的两 kernel 拆分，后续已由 4.14 的单 kernel
 
 当前实现把每一行的在线 max/sum 统计与 normalize/write 合并到一个 physical
 kernel 中，继续使用 1024-thread VF、64 个物理 block、两槽 MTE2/V/MTE3
-流水和行级 `row_max`/`row_inv_sum` workspace。统计阶段先读取 tail tile，随后
-按正序处理完整 tile，使最后一个 stats slot 保留一块 `56320` 元素的完整
-FP16 tile。得到最终统计量后，这一 tile 直接在 UB 中 normalize 并写回，
-避免每行从 GM 重读一块完整 tile；其他 tile 再通过原双槽流水完成写回。
+流水。每行的在线 `(max, sum)` 保存在 `running_stats_ub`，不再分配或访问
+`row_max`/`row_inv_sum` GM workspace。统计阶段先读取 tail tile，随后按正序
+处理完整 tile，使最后一个 stats slot 保留一块 `56320` 元素的完整 FP16
+tile。得到最终统计量后，这一 tile 直接在 UB 中 normalize 并写回，避免每行
+从 GM 重读一块完整 tile；其他 tile 再通过原双槽流水完成写回。
 
 FP32 没有复用这一路径：其 tile 宽度、UB 占用和已有收益证据不同，仍走 4.12
 的两 kernel fallback。这个 dtype 分流是受控 A/B 的保守边界，不代表 FP32
@@ -402,7 +409,7 @@ FP32 没有复用这一路径：其 tile 宽度、UB 占用和已有收益证据
 | exact-128 UB staging | 每 warp 一行、每 tile 32 行的双缓冲 GM/UB 流水 | `17b38fb` |
 | 分发正确性 | 专用 512/1024 与通用 fallback 明确分离 | `15efd0e` |
 | 大 row 片上计算 | 能放入 UB 时 whole-row recompute | `af01f6f` |
-| FP16 超大 row 融合 | stats/write 单 kernel + 完整 UB tile 复用 + 行级 workspace | 当前变更 |
+| FP16 超大 row 融合 | stats/write 单 kernel + 完整 UB tile 复用 + UB 在线统计 | 当前变更 |
 | FP32 超大 row 分阶段 | MTE/UB tiled stats/write 两 kernel + 行级 workspace | `18059f8` 后续优化 |
 
 ## 6. 发布数据中的代表性变化
@@ -504,11 +511,12 @@ prepared input 和 CannBench 默认 `BasicInfo` 参数做了两组成对采集�
 也有成本。混合快照提示该区间值得进一步分析，但是否由该路径导致、在哪些
 shape 上稳定获益，仍需同环境的受控 A/B 才能确认。
 
-### 7.4 超大 row 路径仍有 workspace 分配成本
+### 7.4 FP32 超大 row 路径仍有 workspace 分配成本
 
-每次调用仍会创建 `row_max` 与 `row_inv_sum` 两个 tensor。FP16 已融合为一个
-kernel，但行级 metadata 仍经 GM 保存和读取；FP32 还保留两个 kernel。当
-`outer_size` 较小或 row 仅略超 UB 上限时，固定开销仍可能抵消访存收益。
+FP16 已融合为一个 kernel，行级统计量驻留在 UB，不再创建 metadata tensor。
+FP32 仍会创建 `row_max` 与 `row_inv_sum` 两个 tensor，并保留两个 kernel。
+当 `outer_size` 较小或 row 仅略超 UB 上限时，FP32 的分配和 launch 固定开销
+仍可能抵消访存收益。
 
 ### 7.5 编译器行为是实现约束的一部分
 
@@ -570,17 +578,16 @@ estimated_cost =
 新增 bucket 仍应保持独立编译或至少按资源规模分组，以防编译器 UB 估算问题
 回归。
 
-### P1：减少 large-row metadata workspace
+### P1：减少 FP32 large-row metadata workspace
 
-FP16 已把 stats 和 write 合并为一个 physical kernel，但仍通过 GM
-`row_max`/`row_inv_sum` 保存同一 block 内的行级统计量。可以评估让最终统计量
-继续驻留在 UB 或其他 operator-local 片上状态中，前提是不增加跨 core 协调，
-也不破坏 MTE2/V/MTE3 的事件顺序。FP32 是否适合相同融合必须单独 A/B，不能
-从 FP16 的收益直接推断。
+FP16 已把 stats 和 write 合并为一个 physical kernel，并让最终统计量驻留在
+UB。FP32 仍通过 GM `row_max`/`row_inv_sum` 连接两个 kernel。FP32 是否适合
+相同融合必须单独 A/B，不能从 FP16 的收益直接推断；候选还必须保持稳定归约
+和 MTE2/V/MTE3 的事件顺序。
 
 ### P1：减少临时 tensor 分配开销
 
-`row_max` 和 `row_inv_sum` 都只需要 `outer_size` 个 float。可以评估：
+FP32 的 `row_max` 和 `row_inv_sum` 都只需要 `outer_size` 个 float。可以评估：
 
 - 合并为一个 `[outer_size, 2]` workspace；
 - 通过 operator-local workspace 管理复用分配；
@@ -653,7 +660,6 @@ row sum 检查。
 - FP16 large-row 单 kernel MTE/UB tiled stats/write；
 - FP32 large-row 两 kernel MTE/UB tiled stats/write；
 - whole-row UB recompute；
-- large-row 行级 workspace；
 - spatial。
 
 ### 9.3 编译器回归
