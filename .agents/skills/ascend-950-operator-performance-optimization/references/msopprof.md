@@ -7,6 +7,7 @@
 - [Separate Machine And Human Artifacts](#separate-machine-and-human-artifacts)
 - [Choose Standard CSV Metrics](#choose-standard-csv-metrics)
 - [Choose Special And Control Metrics](#choose-special-and-control-metrics)
+- [Disambiguate Similar Profiler Names](#disambiguate-similar-profiler-names)
 - [Select Metrics From The Question](#select-metrics-from-the-question)
 - [Collect In Separate Passes](#collect-in-separate-passes)
 - [Apply Build Product And Replay Restrictions](#apply-build-product-and-replay-restrictions)
@@ -176,6 +177,42 @@ not support `MarkStamp`. For `InstrTimeline`, each selected pipe is limited to
 1024 instructions; inner SIMT VF and SIMD VF instructions are not displayed,
 and dense instruction streams can lose data. Narrow the selected pipes and
 reduce loop/instruction density in a diagnostic build when necessary.
+
+## Disambiguate Similar Profiler Names
+
+Do not collapse instruction-cache, instruction-buffer, and generic resource
+stalls into one diagnosis:
+
+- `aic_icache_miss_rate` / `aiv_icache_miss_rate` and
+  `aic_scalar_wait_ib_time(us)` / `aiv_scalar_wait_ib_time(us)` are numeric
+  `PipeUtilization.csv` fields. The wait field is Scalar IB wait for I-cache;
+  correlate it with the matching I-cache miss rate before claiming an
+  instruction-fetch bottleneck.
+- `IBuf_Empty` is a SIMT warp-stall category from `PCSampling` in
+  `visualize_data.bin`, not a `PipeUtilization.csv` column. The public 26.2.0
+  PC-sampling categories are `IBuf_Empty`, `Nop_Cycles`,
+  `Scoreboard_Not_Ready`, `Register_bank_conflict`, `Resource_conflict`,
+  `Warp_Level_Sync`, `Divergence_Stack_Spill`, `Others`, and `Active`.
+  The public guide renders the last name as lowercase `active`; preserve the
+  spelling found in the actual artifact when parsing it.
+- `dcache_entry_full` is neither an independent standard CSV field nor a
+  public `PCSampling` category in the checked 26.2.0 contract. Do not relabel
+  `Resource_conflict` as `dcache_entry_full`; retain any such lower-level
+  explanation as a hypothesis until another documented counter or controlled
+  experiment distinguishes it.
+
+The timeline names also refer to different products:
+
+| Name | Meaning in the checked 26.2.0 contract |
+| --- | --- |
+| `PipeUtilization` | numeric per-pipe utilization and wait fields in CSV |
+| `PipeTimeline` | sampled on-board per-pipe timeline |
+| `InstrTimeline` | real on-board instruction timing for selected pipes |
+| `TimelineDetail` | simulated instruction timeline and source hotspot views |
+| `PipeDetail` | not a valid `--aic-metrics` value |
+
+Use the exact installed metric name and artifact instead of treating these
+labels as aliases.
 
 ## Select Metrics From The Question
 
