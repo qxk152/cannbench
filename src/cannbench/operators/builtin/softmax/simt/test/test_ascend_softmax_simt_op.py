@@ -126,7 +126,7 @@ def test_ascend_softmax_v3_persistent_path_uses_shape_aware_threads_per_block():
     source = _read_v3_simt_source("spatial_softmax.asc")
 
     assert "inline int64_t row_softmax_persistent_threads_per_block(int64_t dim_size)" in source
-    assert "if (dim_size == 512) {\n    return 512;" in source
+    assert "if (dim_size == 512) {\n    return 1024;" in source
     assert "if (dim_size == 1024) {\n    return 256;" in source
     assert "return 1024;" in source
     assert "row_softmax_persistent_block_y(block_x, dim_size)" in source
@@ -151,34 +151,45 @@ def test_ascend_softmax_v3_persistent_kernel_uses_shape_aware_launch_bounds():
 
 def test_ascend_softmax_v3_isolates_256_512_and_1024_persistent_kernels():
     source = _read_v3_simt_source("row_persistent_fallback.asc")
+    bucket_common = _read_v3_simt_source("persistent_bucket_pad_common.h")
+    persistent_128 = _read_v3_simt_source("persistent_128.asc")
     persistent_256 = _read_v3_simt_source("persistent_256.asc")
     persistent_512 = _read_v3_simt_source("persistent_512.asc")
     persistent_1024 = _read_v3_simt_source("persistent_1024.asc")
 
+    assert "void dispatch_row_persistent_forward_kernel_128_fp16(" in source
+    assert "void dispatch_row_persistent_forward_kernel_128_fp32(" in source
     assert "void dispatch_row_persistent_forward_kernel_256_fp16(" in source
     assert "void dispatch_row_persistent_forward_kernel_256_fp32(" in source
     assert "void dispatch_row_persistent_forward_kernel_512_fp16(" in source
     assert "void dispatch_row_persistent_forward_kernel_512_fp32(" in source
     assert "void dispatch_row_persistent_forward_kernel_1024_fp16(" in source
     assert "void dispatch_row_persistent_forward_kernel_1024_fp32(" in source
-    assert 'TORCH_CHECK(false, "unsupported 512-thread persistent dtype combination");' in source
+    assert 'TORCH_CHECK(false, "unsupported <=128 persistent dtype combination");' in source
+    assert 'TORCH_CHECK(false, "unsupported 257-512 persistent dtype combination");' in source
     assert 'TORCH_CHECK(false, "unsupported 1024-thread persistent dtype combination");' in source
     assert 'TORCH_CHECK(false, "unsupported 129-256 persistent dtype combination");' in source
-    assert '#include "c_api/asc_simd.h"' in persistent_256
-    assert "__launch_bounds__(1024)" in persistent_256
-    assert "kMaxElements = 256" in persistent_256
-    assert "row_offset = row_in_tile * dim_size" in persistent_256
-    assert "row_softmax_persistent_256_pipeline_kernel" in persistent_256
-    assert "asc_copy_gm2ub_align" in persistent_256
-    assert "asc_copy_ub2gm_align" in persistent_256
-    assert '#include "c_api/asc_simd.h"' in persistent_512
-    assert "__launch_bounds__(512)" in persistent_512
+    assert '#include "persistent_bucket_pad_common.h"' in persistent_128
+    assert '#include "persistent_bucket_pad_common.h"' in persistent_256
+    assert '#include "persistent_bucket_pad_common.h"' in persistent_512
+    assert '#include "c_api/asc_simd.h"' in bucket_common
+    assert "__launch_bounds__(kPersistentBucketThreadsPerBlock)" in bucket_common
+    assert "64>" in persistent_128
+    assert "128>" in persistent_128
+    assert "256>" in persistent_256
+    assert "512>" in persistent_512
+    assert "row_offset = row_in_tile * kBucketCols" in bucket_common
+    assert "row_softmax_persistent_bucket_pad_kernel" in bucket_common
+    assert "asc_copy_gm2ub_align" in bucket_common
+    assert "asc_copy_ub2gm_align" in bucket_common
+    assert "padded_input_row_bytes" in bucket_common
+    assert "padded_output_row_bytes" in bucket_common
+    assert "input_right_padding_elems" in bucket_common
+    assert "asc_reduce_max(max_value)" in bucket_common
+    assert "asc_reduce_add(sum_value)" in bucket_common
+    assert "warp_reduce<" not in bucket_common
+    assert "asc_shfl_xor" not in bucket_common
     assert "dispatch_row_persistent_forward_kernel_with_512_threads" in persistent_512
-    assert "row_softmax_persistent_hybrid_pipeline_kernel" in persistent_512
-    assert "asc_copy_gm2ub_align" in persistent_512
-    assert "asc_copy_ub2gm_align" in persistent_512
-    assert "asc_sync_notify(PIPE_V, PIPE_MTE2, EVENT_ID0);" in persistent_512
-    assert "asc_sync_notify(PIPE_V, PIPE_MTE2, EVENT_ID1);" in persistent_512
     assert '#include "c_api/asc_simd.h"' in persistent_1024
     assert "__launch_bounds__(256)" in persistent_1024
     assert "dispatch_row_persistent_forward_kernel_with_1024_threads" in persistent_1024
@@ -189,135 +200,73 @@ def test_ascend_softmax_v3_isolates_256_512_and_1024_persistent_kernels():
     assert "asc_sync_notify(PIPE_V, PIPE_MTE2, EVENT_ID1);" in persistent_1024
 
 
-def test_ascend_softmax_v3_256_and_1024_persistent_paths_prefetch_next_tile():
-    persistent_256 = _read_v3_simt_source("persistent_256.asc")
+def test_ascend_softmax_v3_bucket_persistent_paths_use_padded_strided_copy():
+    bucket_common = _read_v3_simt_source("persistent_bucket_pad_common.h")
+
+    copy_in = bucket_common.index("asc_copy_gm2ub_align(")
+    current_vf = bucket_common.index("asc_vf_call<row_softmax_persistent_bucket_pad_vf<")
+    copy_out = bucket_common.index("asc_copy_ub2gm_align(")
+
+    assert copy_in < current_vf < copy_out
+    assert "input_tile_ub\n      [2][kPersistentBucketRowsPerTile * kBucketCols]" in bucket_common
+    assert "output_tile_ub\n      [2][kPersistentBucketRowsPerTile * kBucketCols]" in bucket_common
+    assert "static_cast<uint16_t>(row_count)" in bucket_common
+    assert "row_bytes,\n        padded_input_row_bytes" in bucket_common
+    assert "output_row_bytes,\n        padded_output_row_bytes" in bucket_common
+    assert "asc_sync_wait(PIPE_MTE3, PIPE_V, event_id)" in bucket_common
+    assert "basic_api/" not in bucket_common
+    assert "kernel_operator.h" not in bucket_common
+
+
+def test_ascend_softmax_v3_1024_persistent_path_prefetches_next_tile():
     persistent_1024 = _read_v3_simt_source("persistent_1024.asc")
 
-    for source, vf_name in (
-        (persistent_256, "asc_vf_call<row_softmax_persistent_256_vf<"),
-        (persistent_1024, "asc_vf_call<row_softmax_persistent_hybrid_vf<"),
-    ):
-        next_tile = source.index("if (tile_idx + 1 < tile_count)")
-        prefetch = source.index("asc_copy_gm2ub_align(", next_tile)
-        current_vf = source.index(vf_name, next_tile)
-        assert prefetch < current_vf
-        assert "input_tile_ub[2]" in source
-        assert "output_tile_ub[2]" in source
-        assert "asc_sync_wait(PIPE_V, PIPE_MTE2, next_event_id)" in source
-        assert "asc_sync_notify(PIPE_MTE2, PIPE_V, next_event_id)" in source
-        assert "asc_sync_wait(PIPE_MTE3, PIPE_V, event_id)" in source
+    next_tile = persistent_1024.index("if (tile_idx + 1 < tile_count)")
+    prefetch = persistent_1024.index("asc_copy_gm2ub_align(", next_tile)
+    current_vf = persistent_1024.index(
+        "asc_vf_call<row_softmax_persistent_hybrid_vf<", next_tile
+    )
+    assert prefetch < current_vf
+    assert "input_tile_ub[2]" in persistent_1024
+    assert "output_tile_ub[2]" in persistent_1024
+    assert "asc_sync_wait(PIPE_V, PIPE_MTE2, next_event_id)" in persistent_1024
+    assert "asc_sync_notify(PIPE_MTE2, PIPE_V, next_event_id)" in persistent_1024
+    assert "asc_sync_wait(PIPE_MTE3, PIPE_V, event_id)" in persistent_1024
 
 
-def test_ascend_softmax_v3_dispatches_exact_128_to_single_row_ub_pipeline():
+def test_ascend_softmax_v3_dispatches_le_128_to_bucket_pad_pipeline():
     dispatch = _read_v3_simt_source("row_persistent_fallback.asc")
     persistent_128 = _read_v3_simt_source("persistent_128.asc")
-    exact_128_start = dispatch.index("if (dim_size == 128)")
-    exact_128_end = dispatch.index(
-        "if (dim_size >= 129 && dim_size <= 160)", exact_128_start
+    le_128_start = dispatch.index("if (dim_size <= 128)")
+    le_128_end = dispatch.index(
+        "if (dim_size >= 129 && dim_size <= 256)", le_128_start
     )
-    exact_128_dispatch = dispatch[exact_128_start:exact_128_end]
+    le_128_dispatch = dispatch[le_128_start:le_128_end]
 
-    assert "if (dim_size == 128)" in dispatch
-    assert "dispatch_row_persistent_forward_kernel_128_fp16(" in exact_128_dispatch
-    assert "dispatch_row_persistent_forward_kernel_128_fp32(" in exact_128_dispatch
-    assert '#include "c_api/asc_simd.h"' in persistent_128
-    assert "constexpr int32_t kElements = 128" in persistent_128
-    assert "constexpr int32_t kRowsPerWarp = 1" in persistent_128
-    assert "constexpr int32_t kRowsPerTile = 32" in persistent_128
-    assert "__launch_bounds__(1024)" in persistent_128
-    assert "input_tile_ub[2]" in persistent_128
-    assert "output_tile_ub[2]" in persistent_128
-    assert "asc_copy_gm2ub_align" in persistent_128
-    assert "asc_copy_ub2gm_align" in persistent_128
+    assert "if (dim_size <= 128)" in dispatch
+    assert "dispatch_row_persistent_forward_kernel_128_fp16(" in le_128_dispatch
+    assert "dispatch_row_persistent_forward_kernel_128_fp32(" in le_128_dispatch
+    assert '#include "persistent_bucket_pad_common.h"' in persistent_128
+    assert "dim_size <= 64" in persistent_128
+    assert "64>" in persistent_128
+    assert "128>" in persistent_128
     assert "basic_api/" not in persistent_128
     assert "kernel_operator.h" not in persistent_128
-
-
-def test_ascend_softmax_v3_129_through_256_pipeline_uses_tight_compile_time_buckets():
-    persistent_256 = _read_v3_simt_source("persistent_256.asc")
-    persistent_tight = _read_v3_simt_source("persistent_160_224.asc")
-    dispatch = _read_v3_simt_source("row_persistent_fallback.asc")
-    setup = (SIMT_OP_V3_ROOT / "setup.py").read_text()
-
-    assert "kMaxElements = 160" in persistent_tight
-    assert "kMaxElements = 224" in persistent_tight
-    assert "dim_size >= 129 && dim_size <= 160" in dispatch
-    assert "dim_size >= 161 && dim_size <= 224" in dispatch
-    assert "dispatch_row_persistent_forward_kernel_160_fp16(" in dispatch
-    assert "dispatch_row_persistent_forward_kernel_224_fp16(" in dispatch
-    assert "dispatch_row_persistent_forward_kernel_160_fp32(" in dispatch
-    assert "dispatch_row_persistent_forward_kernel_224_fp32(" in dispatch
-    assert "kMaxElements = 256" in persistent_256
-    assert "kMaxElements = 160" not in persistent_256
-    assert "kMaxElements = 224" not in persistent_256
-    assert '#include "c_api/asc_simd.h"' in persistent_tight
-    assert "basic_api/" not in persistent_tight
-    assert "kernel_operator.h" not in persistent_tight
-    assert 'source.endswith("persistent_160_224.asc")' in setup
 
 
 def test_ascend_softmax_v3_dispatches_129_through_256_to_ub_pipeline():
     source = _read_v3_simt_source("row_persistent_fallback.asc")
 
-    assert "dim_size >= 129 && dim_size <= 160" in source
-    assert "dim_size >= 161 && dim_size <= 224" in source
-    assert "dim_size >= 225 && dim_size <= 255" in source
-    assert "dim_size == 256" in source
+    assert "dim_size >= 129 && dim_size <= 256" in source
     assert "dispatch_row_persistent_forward_kernel_256_fp16(" in source
     assert "dispatch_row_persistent_forward_kernel_256_fp32(" in source
-
-
-def test_ascend_softmax_v3_dispatches_exact_256_without_capacity_guards():
-    dispatch = _read_v3_simt_source("row_persistent_fallback.asc")
-    persistent_256 = _read_v3_simt_source("persistent_256.asc")
-
-    exact_start = dispatch.index("if (dim_size == 256)")
-    capacity_start = dispatch.index(
-        "if (dim_size >= 225 && dim_size <= 255)", exact_start
-    )
-    exact_dispatch = dispatch[exact_start:capacity_start]
-    capacity_end = dispatch.index("if (dim_size == 1024)", capacity_start)
-    capacity_dispatch = dispatch[capacity_start:capacity_end]
-
-    assert "dispatch_row_persistent_forward_kernel_exact_256_fp16(" in exact_dispatch
-    assert "dispatch_row_persistent_forward_kernel_exact_256_fp32(" in exact_dispatch
-    assert "dispatch_row_persistent_forward_kernel_256_fp16(" in capacity_dispatch
-    assert "dispatch_row_persistent_forward_kernel_256_fp32(" in capacity_dispatch
-
-    exact_vf_start = persistent_256.index("row_softmax_persistent_exact_256_vf")
-    exact_vf_end = persistent_256.index(
-        "template <\n    typename scalar_t", exact_vf_start
-    )
-    exact_vf = persistent_256[exact_vf_start:exact_vf_end]
-    assert "constexpr int32_t kElements = 256" in exact_vf
-    assert "constexpr int32_t kWarpIterations = 8" in exact_vf
-    assert "const int32_t row_in_tile" in exact_vf
-    assert "const int32_t lane" in exact_vf
-    assert "const int32_t row_offset" in exact_vf
-    assert "const int32_t element_index" in exact_vf
-    assert "element_index < dim_size" not in exact_vf
-    assert "int64_t dim_size" not in exact_vf
-    assert "const int64_t row_base" in persistent_256
-    assert "bool kExactWidth" in persistent_256
-    assert "if constexpr (kExactWidth)" in persistent_256
-    assert persistent_256.count("asc_init();") == 1
-    assert "row_softmax_persistent_exact_256_vf<" in persistent_256
-    assert "row_softmax_persistent_256_vf<" in persistent_256
-    assert "basic_api/" not in persistent_256
-    assert "kernel_operator.h" not in persistent_256
-    assert "AscendC::LocalTensor" not in persistent_256
-    assert "CrossCoreSetFlag" not in persistent_256
-    assert "CrossCoreWaitFlag" not in persistent_256
-    assert "SetFlag" not in persistent_256
-    assert "WaitFlag" not in persistent_256
-    assert "PipeBarrier" not in persistent_256
 
 
 def test_ascend_softmax_v3_remaining_persistent_fallback_uses_generic_1024_thread_kernel():
     source = _read_v3_simt_source("row_persistent_fallback.asc")
 
     assert "if (dim_size == 1024) {" in source
-    assert "if (dim_size == 512) {" in source
+    assert "if (dim_size >= 257 && dim_size <= 512) {" in source
     assert "dispatch_row_persistent_forward_kernel_with_threads<" in source
     generic_section = source[source.rindex("dispatch_row_persistent_forward_kernel_with_threads<") :]
     assert "1024>(" in generic_section
@@ -472,14 +421,30 @@ def test_ascend_softmax_v3_fast_path_uses_large_row_recompute_for_logits_scale_d
     assert "kLargeRowFp32TileElements>(" in source
 
 
-def test_ascend_softmax_v3_large_rows_use_mte_tiled_workspace_pipeline():
+def test_ascend_softmax_v3_large_rows_use_mte_tiled_pipeline_with_fp16_fused_no_workspace():
     row_fast_source = _read_v3_simt_source("row_fast.asc")
     spatial_source = _read_v3_simt_source("spatial_softmax.asc")
 
     assert "launch_row_fast_large_tiled_forward_kernel" in row_fast_source
     assert "dispatch_row_fast_large_tiled_forward_kernel" in row_fast_source
+    assert "dispatch_row_fast_large_tiled_fused_forward_kernel" in row_fast_source
+    assert "dispatch_row_fast_large_tiled_fused_forward_kernel" in spatial_source
     assert "row_softmax_fast_large_ub_tiled_stats_pipeline_kernel<" in row_fast_source
     assert "row_softmax_fast_large_ub_tiled_write_pipeline_kernel<" in row_fast_source
+    assert "row_softmax_fast_large_ub_tiled_fused_pipeline_kernel<" in row_fast_source
+    assert "row_softmax_fast_large_ub_tiled_local_stats_vf" in row_fast_source
+    assert "row_softmax_fast_large_ub_tiled_write_local_stats_vf" in row_fast_source
+    fused_start = row_fast_source.index(
+        "row_softmax_fast_large_ub_tiled_fused_pipeline_impl"
+    )
+    fused_end = row_fast_source.index(
+        "row_softmax_fast_large_ub_tiled_fused_pipeline_kernel", fused_start
+    )
+    fused_source = row_fast_source[fused_start:fused_end]
+    assert "const int32_t retained_tile_idx = tile_count - 2;" in fused_source
+    assert "const int32_t retained_slot = (tile_count - 1) & 1;" in fused_source
+    assert "row_softmax_fast_large_ub_tiled_write_local_stats_vf<scalar_t>" in fused_source
+    assert "const int32_t remaining_write_count = tile_count - 1;" in fused_source
     assert "row_softmax_fast_large_gmem_max_vf" not in row_fast_source
     assert "row_softmax_fast_large_gmem_sum_vf" not in row_fast_source
     assert "row_softmax_fast_large_gmem_write_vf" not in row_fast_source
@@ -488,38 +453,22 @@ def test_ascend_softmax_v3_large_rows_use_mte_tiled_workspace_pipeline():
     assert "row_softmax_fast_large_gmem_write_kernel" not in row_fast_source
     assert "use_large_row_workspace_row_softmax_fast" in spatial_source
     assert "kMaxWholeRowElements = kFp16Path ? 56320 : 28160" in spatial_source
+    assert "row_max_ptr == nullptr" in spatial_source
+    assert "use_large_row_workspace_row_softmax_fast<scalar_t, outscalar_t>(dim_size)" in spatial_source
+    half_branch_start = spatial_source.index(
+        "if (in_tensor.scalar_type() == at::ScalarType::Half)"
+    )
+    half_branch_end = spatial_source.index(
+        "} else if (in_tensor.scalar_type() == at::ScalarType::Float)",
+        half_branch_start,
+    )
+    half_branch = spatial_source[half_branch_start:half_branch_end]
+    assert "auto row_max = at::empty({outer_size}" not in half_branch
+    assert "auto row_inv_sum = at::empty({outer_size}" not in half_branch
     assert "auto row_max = at::empty({outer_size}" in spatial_source
     assert "auto row_inv_sum = at::empty({outer_size}" in spatial_source
     assert "row_max.mutable_data_ptr<float>()" in spatial_source
     assert "row_inv_sum.mutable_data_ptr<float>()" in spatial_source
-
-
-def test_ascend_softmax_v3_huge_fp16_rows_fuse_stats_and_write_per_row():
-    source = _read_v3_simt_source("row_fast.asc")
-
-    assert "row_softmax_fast_large_ub_fused_pipeline_impl" in source
-    assert "row_softmax_fast_large_ub_fused_pipeline_kernel<" in source
-    assert "launch_row_fast_large_fused_forward_kernel<" in source
-    assert "if constexpr (std::is_same_v<scalar_t, __fp16>)" in source
-    assert "launch_row_fast_large_fused_forward_kernel<" in source
-    assert "row_softmax_fast_large_ub_tiled_stats_pipeline_kernel<" in source
-    assert "row_softmax_fast_large_ub_tiled_write_pipeline_kernel<" in source
-
-
-def test_ascend_softmax_v3_huge_fp16_fused_path_reuses_one_full_ub_tile():
-    source = _read_v3_simt_source("row_fast.asc")
-    fused_start = source.index("row_softmax_fast_large_ub_fused_pipeline_impl")
-    fused_end = source.index(
-        "row_softmax_fast_large_ub_fused_pipeline_kernel", fused_start
-    )
-    fused_source = source[fused_start:fused_end]
-
-    assert "const int64_t stats_tile_idx = stats_iter == 0" in fused_source
-    assert "? tile_count - 1" in fused_source
-    assert ": stats_iter - 1;" in fused_source
-    assert "const int64_t retained_tile_idx = tile_count - 2;" in fused_source
-    assert "const int64_t retained_slot = (tile_count - 1) & 1;" in fused_source
-    assert "const int64_t remaining_write_count = tile_count - 1;" in fused_source
 
 
 def test_ascend_softmax_v3_fp16_50k_rows_use_single_inplace_ub_pipeline():
@@ -549,8 +498,10 @@ def test_ascend_softmax_v3_large_fp16_ub_reductions_use_half2_with_tail_fallback
     whole_row_end = source.index(
         "row_softmax_fast_large_row_recompute_impl", whole_row_start
     )
-    tiled_start = source.index("row_softmax_fast_large_ub_tiled_stats_vf")
-    tiled_end = source.index("row_softmax_fast_large_ub_tiled_write_vf", tiled_start)
+    tiled_start = source.index(
+        "row_softmax_fast_large_ub_tiled_update_running_stats"
+    )
+    tiled_end = source.index("row_softmax_fast_large_ub_tiled_stats_vf", tiled_start)
 
     for section, input_name, size_name in (
         (source[whole_row_start:whole_row_end], "input_ub", "tile_size"),
@@ -562,7 +513,10 @@ def test_ascend_softmax_v3_large_fp16_ub_reductions_use_half2_with_tail_fallback
         assert section.count(half2_cast) >= 2
         assert section.count("__low2float(") >= 4
         assert section.count("__high2float(") >= 4
-        assert section.count("if (pair_offset + 1 < half2_size)") >= 2
+        assert section.count("quad_half2_size = half2_size & ~3") >= 2
+        assert section.count("pair_offset < quad_half2_size") >= 2
+        assert "if (pair_offset + 1 < half2_size)" not in section
+        assert section.count("tail_pair =") >= 2
         assert section.count(f"if (({size_name} % 2) != 0 && threadIdx.x == 0)") >= 2
         assert "offset = threadIdx.x * kLargeRowILP" in section
         assert "offset += blockDim.x * kLargeRowILP" in section
@@ -579,7 +533,7 @@ def test_ascend_softmax_v3_fp16_and_fp32_huge_rows_use_tiled_online_stats():
     assert "previous_sum * __expf(previous_max - combined_max)" in source
     assert "tile_sum * __expf(tile_max - combined_max)" in source
     assert "next_tile_elements * sizeof(scalar_t)" in source
-    assert "row_inv_sum[row] = 1.0f / combined_sum;" in source
+    assert "row_inv_sum[row] = 1.0f / running_stats[1];" in source
 
 
 def test_ascend_softmax_v3_large_rows_pipeline_tiled_final_write():
