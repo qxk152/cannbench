@@ -10,6 +10,9 @@ DSA 两阶段抽象、逻辑输入输出和真实序列元数据合同。
   物理布局；跨机器 artifact 和 conformance 门禁已经建立。
 - Ascend SIMT 与 vLLM-Ascend 的完整 V3.2 prefill/decode 已通过门禁；CUDA
   路径尚缺可用 NVIDIA 节点，当前只有 adapter 与 runner 覆盖。
+- V3.2 BF16 的 vLLM-Ascend 路径最终执行 CANN OPP 随包提供的预编译 device
+  kernel；自编译的 vLLM Ascend 扩展在该路径中是 host 侧 wrapper。因此不再把
+  直接 CANN API 调用作为一条独立的 V3.2 性能实现。
 - 底层布局、存储精度和 kernel 数量可以不同，这些属于实现差异。
 - 在 CUDA conformance 收敛前，性能测试只能作为初步数据，不能视为严格公平的
   三后端生产实现对标。
@@ -188,6 +191,52 @@ V3.2 Sparse Attention 调用 `npu_sparse_flash_attention`。Adapter 将逻辑上
 这些 TND KV 和 NoPE/RoPE 拆分属于物理接口适配，不应改变逻辑算子语义。
 生产推理只需要 output 时仍可使用分页 KV，但不能把“paged output 一次 + TND
 LSE 一次”的重复计算计入统一单次性能结果。
+
+#### V3.2 BF16 的 device kernel 来源
+
+在 Ascend 950PR、CANN 9.2.0 和 vLLM Ascend commit `059611dc1` 上，对
+`deepseek_v32_flashmla_decode_b2_q2_ctx32768_top2048` 的采集确认：V3.2 BF16
+路径的 API 入口虽然属于 vLLM Ascend，但最终执行的是 CANN OPP 随包提供的
+官方预编译 device kernel：
+
+```text
+Python / vLLM API
+  -> self-compiled vllm_ascend_C.so Torch wrapper
+  -> ACLNN / system libopapi.so
+  -> official CANN OPP precompiled device .o
+```
+
+当前 CannBench 的 Indexer adapter 已直接调用
+`torch_npu.npu_lightning_indexer`。vLLM Ascend 自身的
+`npu_lightning_indexer` 和 `npu_sparse_flash_attention` wrapper 分别通过
+`EXEC_NPU_CMD(aclnnLightningIndexer, ...)` 和
+`EXEC_NPU_CMD(aclnnSparseFlashAttention, ...)` 下发；`vllm_ascend_C.so` 运行时
+解析到 `/usr/local/Ascend/cann-9.2.0/lib64/libopapi.so`。因此这里“自己编译”的
+是 Torch 注册、参数适配和 ACLNN 调用 wrapper，不是这两个 BF16 device
+kernel 本体。
+
+采集命中的主 kernel 来自以下 CANN OPP 二进制：
+
+```text
+/usr/local/Ascend/cann-9.2.0/opp/built-in/op_impl/ai_core/tbe/kernel/ascend950/ops_transformer/lightning_indexer/LightningIndexer_2517851d7f53b28f971ff94bfa4b7037.o
+/usr/local/Ascend/cann-9.2.0/opp/built-in/op_impl/ai_core/tbe/kernel/ascend950/ops_transformer/sparse_flash_attention/SparseFlashAttention_9ec0bacf213f2b2dce3ba70149a4903b.o
+```
+
+直接 CANN API 临时验证路径与 vLLM-Ascend 路径的 kernel 序列、kernel hash、
+tiling key 和 launch geometry 均相同；两个主 kernel 都是 `block=32`、
+`mix_block=64`。同机采集的耗时如下：
+
+| 组件 | 直接 CANN API | vLLM-Ascend |
+| --- | ---: | ---: |
+| Lightning Indexer | 98.247 us | 98.026 us |
+| Sparse Attention path | 71.179 us | 71.059 us |
+| Workflow | 169.426 us | 169.085 us |
+
+这组差异属于 profiler 波动，不能视为两个 device 实现的性能差异。因此单独发布
+`cann_ops_library` V3.2 记录会重复测量同一组 device kernel，只保留
+`vllm_ascend` 记录。该结论只适用于 V3.2 BF16 DSA；vLLM Ascend 仍包含其他
+自定义算子，以及量化/V4 DSA 的自定义 device kernel，不能概括为“vLLM
+Ascend 只有量化算子”。
 
 ### CUDA
 
